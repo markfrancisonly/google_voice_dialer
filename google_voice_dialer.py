@@ -390,11 +390,11 @@ def uninstall():
 
 def main():
     parser = argparse.ArgumentParser(description="Google Voice Dialer")
-    parser.add_argument('--register', action='store_true', help="Register the application protocol handler for TEL links")
-    parser.add_argument('--unregister', action='store_true', help="Unregister the application protocol handler for TEL links")
-    parser.add_argument('--install', action='store_true', help="Build and install the application")
-    parser.add_argument('--uninstall', action='store_true', help="Uninstall the application")
-    parser.add_argument('url', nargs='?', help="The tel: URL to dial")
+    parser.add_argument('--install', action='store_true', help="build and/or install application")
+    parser.add_argument('--uninstall', action='store_true', help="uninstall application")
+    parser.add_argument('--register', action='store_true', help="register handler for TEL links")
+    parser.add_argument('--unregister', action='store_true', help="unregister handler for TEL links")
+    parser.add_argument('url', nargs='?', help="tel: URL to dial")
 
     args = parser.parse_args()
 
@@ -409,7 +409,12 @@ def main():
     elif args.url:
         dial(args.url)
     else:
-        parser.print_help()
+        help_text = parser.format_help()
+        if getattr(sys, 'frozen', False):
+            win32api.MessageBox(0, help_text, "Google Voice Dialer Usage", win32con.MB_OK | win32con.MB_ICONINFORMATION)
+        else:
+            print(help_text)
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()
