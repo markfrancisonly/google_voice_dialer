@@ -1,8 +1,10 @@
 # Google Voice Dialer
 
-**Call phone numbers from any app in Windows using Google Voice.**
+**Dial phone numbers from any app in Windows using Google Voice phone service.**
 
 Click a `tel:` or `callto:` link and have it open directly in the Google Voice web app (PWA) or Chrome — no copy/paste, no fumbling with your browser.
+
+<img width="1338" height="791" alt="image" src="https://github.com/user-attachments/assets/71faae3b-1ab1-4ca9-8a42-34890e05ab56" />
 
 ## Why use it?
 
@@ -17,6 +19,7 @@ Click a `tel:` or `callto:` link and have it open directly in the Google Voice w
 - Launches the Google Voice PWA via Chrome for quick dialing.
 - Automatically detects your installed Chrome/Voice app.
 - Supports both portable script use and one-click install to `%APPDATA%`.
+
 
 ## Quick start
 
