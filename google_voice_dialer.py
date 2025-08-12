@@ -18,16 +18,16 @@
 #       Remove the executable and unregister the handler.
 #
 
-import sys
-import webbrowser
-import re
-import urllib.parse
-import winreg
-import os
 import argparse
 import datetime
-import subprocess
+import os
+import re
 import shutil
+import subprocess
+import sys
+import urllib.parse
+import webbrowser
+import winreg
 
 try:
     import win32com.client as com_client
@@ -36,9 +36,9 @@ except ImportError:
 
 try:
     import win32api
+    import win32con
     import win32gui
     import win32ui
-    import win32con
 except ImportError:
     pass
 
@@ -354,9 +354,9 @@ def install_executable():
                 try:
                     global win32api, win32gui, win32ui, win32con
                     import win32api
+                    import win32con
                     import win32gui
                     import win32ui
-                    import win32con
                 except ImportError as e:
                     raise ImportError(
                         f"Failed to import win32 modules after installing pywin32: {e}"
@@ -509,10 +509,22 @@ def dial(phone_url):
         phone_url.lower().startswith("tel:") or phone_url.lower().startswith("callto:")
     ):
         return
-
     # Extract and clean phone number (preserve single leading +, strip non-digits)
     phone = re.sub(r"^(tel|callto):", "", phone_url, flags=re.IGNORECASE).strip()
     phone = urllib.parse.unquote(phone)
+    
+    # Strip everything after the first , or #
+    idx_comma = phone.find(',')
+    idx_hash = phone.find('#')
+    if idx_comma == -1:
+        idx = idx_hash
+    elif idx_hash == -1:
+        idx = idx_comma
+    else:
+        idx = min(idx_comma, idx_hash)
+    if idx != -1:
+        phone = phone[:idx].strip()
+    
     plus = "+" if phone.startswith("+") else ""
     digits = re.sub(r"\D", "", phone)
     phone = plus + digits
