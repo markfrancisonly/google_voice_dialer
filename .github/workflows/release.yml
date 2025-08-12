@@ -1,0 +1,55 @@
+name: Release
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+jobs:
+  release:
+    name: Prepare release asset
+    runs-on: windows-latest
+    steps:
+      - name: ⤵️ Check out code from GitHub
+        uses: actions/checkout@v4
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller pillow pyinstaller_versionfile pywin32
+      - name: 🔢 Adjust version number
+        shell: pwsh
+        run: |
+          $version = "${{ github.event.release.tag_name }}".TrimStart('v')
+          (Get-Content google_voice_dialer.py) -replace 'VERSION = "1.1.0"', "VERSION = `"$version`"" | Set-Content google_voice_dialer.py
+      - name: 📄 Create version file
+        shell: python
+        run: |
+          import pyinstaller_versionfile
+          tag = "${{ github.event.release.tag_name }}"
+          version = tag[1:] if tag.startswith('v') else tag
+          pyinstaller_versionfile.create_versionfile(
+              output_file="version_info.txt",
+              version=version,
+              company_name="Google Voice Dialer",
+              file_description="Google Voice tel: protocol handler. Dial phone numbers using Google Voice.",
+              internal_name="Google Voice Dialer",
+              legal_copyright="© 2025",
+              original_filename="Google Voice Dialer.exe",
+              product_name="Google Voice Dialer"
+          )
+      - name: 🛠️ Build with PyInstaller
+        run: pyinstaller --onefile --noconsole --clean --name "Google Voice Dialer" --version-file version_info.txt --icon google_voice_dialer.ico google_voice_dialer.py
+      - name: 📦 Create zipped release package
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/Google Voice Dialer.exe" -DestinationPath google_voice_dialer.zip
+      - name: ⬆️ Upload zip to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: "${{ github.workspace }}/google_voice_dialer.zip"
+          asset_name: google_voice_dialer.zip
+          tag: ${{ github.ref }}
+          overwrite: true
