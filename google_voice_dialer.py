@@ -5,18 +5,19 @@
 #   Supports protocol registration, unregistration, building to executable,
 #   dynamic Chrome app detection, and dialing via Google Voice.
 #
-# Usage: Install python and pip, then run:
+# Usage: Run the script or executable with:
 #
-#   py google_voice_dialer.py --install
+#   python google_voice_dialer.py --install  
 #
-#       Build the script into a standalone exe and install it as a TEL link
-#       default app protocol handler in your AppData folder.
+#       Copies the script to your AppData folder and registers it as a TEL link
+#       default app protocol handler.
 #
 #
-#   py google_voice_dialer.py --uninstall
+#   python google_voice_dialer.py --uninstall 
 #
-#       Remove the executable and unregister the handler.
+#       Removes the installed files and unregisters the handler.
 #
+# Requirements: Python 3, pywin32 (for Windows-specific features)
 
 import argparse
 import datetime
@@ -37,8 +38,6 @@ except ImportError:
 try:
     import win32api
     import win32con
-    import win32gui
-    import win32ui
 except ImportError:
     pass
 
@@ -164,18 +163,21 @@ def get_google_voice_icon_location():
         return None
 
 
-def register_handler(exe_path=None):
+def register_handler(path: str = None):
     """Register the handler for tel: protocol with capabilities for Windows 11."""
     try:
         # Determine the running file path (script or executable)
-        if exe_path:
-            running_path = exe_path
+        if path.lower().endswith(".exe"):
+            running_path = path
             runner = ""
         elif getattr(sys, "frozen", False):
             running_path = sys.executable
             runner = ""
         else:
-            running_path = os.path.abspath(__file__)
+
+            running_path = (
+                path if path.lower().endswith(".py") else os.path.abspath(__file__)
+            )
             python_exe = sys.executable
             # Use pythonw.exe to run without a console window
             candidate = os.path.join(os.path.dirname(python_exe), "pythonw.exe")
@@ -300,199 +302,41 @@ def unregister_handler(prog_id=PROG_ID, prog_name=PROG_NAME):
         print(f"Error unregistering: {e}")
 
 
-def extract_and_save_icon(icon_file, icon_index, output_ico):
-    large, small = win32gui.ExtractIconEx(icon_file, icon_index)
-    if large:
-        hicon = large[0]
-    elif small:
-        hicon = small[0]
-    else:
-        raise Exception("No icon extracted")
-
-    ico_x = win32api.GetSystemMetrics(win32con.SM_CXICON)
-    ico_y = win32api.GetSystemMetrics(win32con.SM_CYICON)
-    hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
-    hbmp = win32ui.CreateBitmap()
-    hbmp.CreateCompatibleBitmap(hdc, ico_x, ico_y)
-    hdc = hdc.CreateCompatibleDC()
-    hdc.SelectObject(hbmp)
-    hdc.DrawIcon((0, 0), hicon)
-    bmpinfo = hbmp.GetInfo()
-    bmpstr = hbmp.GetBitmapBits(True)
-    from PIL import Image
-
-    img = Image.frombuffer(
-        "RGBA", (bmpinfo["bmWidth"], bmpinfo["bmHeight"]), bmpstr, "raw", "BGRA", 0, 1
-    )
-    img.save(output_ico, "ICO")
-    win32gui.DestroyIcon(hicon)
-
-
-def install_executable():
+def install():
     try:
         appdata_dir = os.path.expandvars(rf"%APPDATA%\{PROG_ID}")
         os.makedirs(appdata_dir, exist_ok=True)
         target_exe = os.path.join(appdata_dir, PROG_ID + ".exe")
+        target_py = os.path.join(appdata_dir, "google_voice_dialer.py")
 
         if getattr(sys, "frozen", False):
             # Running as executable, copy self to appdata
-            source_exe = sys.executable
-            if os.path.abspath(source_exe) != os.path.abspath(target_exe):
-                shutil.copy(source_exe, target_exe)
+            source = sys.executable
+            target = target_exe
+            if os.path.abspath(source) != os.path.abspath(target):
+                shutil.copy(source, target)
             else:
                 print("Already installed in AppData.")
+            install_path = target
         else:
-            # Not frozen, build it
-            global com_client
-            if com_client is None:
-                print("Installing pywin32...")
-                subprocess.check_call(
-                    [sys.executable, "-m", "pip", "install", "--user", "pywin32"]
-                )
-                import win32com.client as com_client
+            # Running as script, copy the script to appdata
+            source = os.path.abspath(__file__)
+            target = target_py
+            if os.path.abspath(source) != os.path.abspath(target):
+                shutil.copy(source, target)
+            else:
+                print("Already installed in AppData.")
+            install_path = target
 
-                try:
-                    global win32api, win32gui, win32ui, win32con
-                    import win32api
-                    import win32con
-                    import win32gui
-                    import win32ui
-                except ImportError as e:
-                    raise ImportError(
-                        f"Failed to import win32 modules after installing pywin32: {e}"
-                    )
-
-            # Ensure pyinstaller
-            try:
-                subprocess.check_call(
-                    ["pyinstaller", "--version"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                print("Installing pyinstaller...")
-                subprocess.check_call(
-                    [sys.executable, "-m", "pip", "install", "--user", "pyinstaller"]
-                )
-
-            # Ensure pillow
-            try:
-                from PIL import Image  # noqa: F401
-            except ImportError:
-                print("Installing pillow...")
-                subprocess.check_call(
-                    [sys.executable, "-m", "pip", "install", "--user", "pillow"]
-                )
-                from PIL import Image  # noqa: F401
-
-            # Ensure pyinstaller_versionfile
-            try:
-                import pyinstaller_versionfile  # noqa: F401
-            except ImportError:
-                print("Installing pyinstaller_versionfile...")
-                subprocess.check_call(
-                    [
-                        sys.executable,
-                        "-m",
-                        "pip",
-                        "install",
-                        "--user",
-                        "pyinstaller_versionfile",
-                    ]
-                )
-                import pyinstaller_versionfile  # type: ignore
-
-            # Paths anchored to the script directory
-            script_path = os.path.abspath(__file__)
-            script_dir = os.path.dirname(script_path)
-            version_file_path = os.path.join(script_dir, "version_info.txt")
-            icon_ico = os.path.join(script_dir, "google_voice.ico")
-
-            # Get Google Voice icon location
-            icon_arg = []
-            icon_location = get_google_voice_icon_location()
-            if icon_location:
-                try:
-                    parts = icon_location.rsplit(",", 1)
-                    if len(parts) == 2:
-                        icon_file = parts[0].strip()
-                        icon_index_str = parts[1].strip()
-                        icon_index = int(icon_index_str)
-                    else:
-                        icon_file = icon_location.strip()
-                        icon_index = 0
-                    extract_and_save_icon(icon_file, icon_index, icon_ico)
-                    icon_arg = ["--icon", icon_ico]
-                    print("Extracted Google Voice icon for executable.")
-                except Exception as e:
-                    print(f"Failed to extract icon: {e}. Building without custom icon.")
-                    icon_ico = None  # avoid deleting a file that wasn't created
-
-            # Create version file using pyinstaller_versionfile (in script_dir)
-            try:
-                import pyinstaller_versionfile
-
-                pyinstaller_versionfile.create_versionfile(
-                    output_file=version_file_path,
-                    version=VERSION,
-                    company_name="Google Voice Dialer",
-                    file_description=PROG_DESC,
-                    internal_name=PROG_ID,
-                    legal_copyright="© 2025",
-                    original_filename=f"{PROG_ID}.exe",
-                    product_name=PROG_NAME,
-                )
-            except Exception as e:
-                print(f"Warning: failed to create version file: {e}")
-                version_file_path = None  # build without version info if creation fails
-
-            # Build the executable (run in script_dir so dist/ lands there)
-            build_args = (
-                [
-                    "pyinstaller",
-                    "--onefile",
-                    "--noconsole",
-                    "--clean",
-                    "--name",
-                    PROG_ID,
-                ]
-                + icon_arg
-                + (["--version-file", version_file_path] if version_file_path else [])
-                + [script_path]
-            )
-            subprocess.check_call(build_args, cwd=script_dir)
-            print("Executable built successfully. Check the dist folder.")
-
-            # Copy to AppData from script_dir/dist
-            dist_exe = os.path.join(script_dir, "dist", PROG_ID + ".exe")
-            if not os.path.exists(dist_exe):
-                raise FileNotFoundError(f"Built executable not found: {dist_exe}")
-            shutil.copy(dist_exe, target_exe)
-
-            # Clean up temporary build artifacts in script_dir
-            try:
-                if icon_ico and os.path.exists(icon_ico):
-                    os.remove(icon_ico)
-                if version_file_path and os.path.exists(version_file_path):
-                    os.remove(version_file_path)
-                spec_path = os.path.join(script_dir, f"{PROG_ID}.spec")
-                build_dir = os.path.join(script_dir, "build")
-                if os.path.exists(spec_path):
-                    os.remove(spec_path)
-                if os.path.isdir(build_dir):
-                    shutil.rmtree(build_dir)
-            except Exception:
-                pass
-
-        # Register the copied exe
-        if os.path.exists(target_exe):
-            register_handler(exe_path=target_exe)
+        # Register the copied file
+        if os.path.exists(install_path):
+            register_handler(path=install_path)
             subprocess.call(["start", "ms-settings:defaultapps"], shell=True)
         else:
-            print("Executable not found at expected path.")
+            print("File not found at expected path.")
 
     except Exception as e:
-        print(f"Error installing executable: {e}")
+        print(f"Error installing: {e}")
 
 
 def uninstall():
@@ -512,10 +356,10 @@ def dial(phone_url):
     # Extract and clean phone number (preserve single leading +, strip non-digits)
     phone = re.sub(r"^(tel|callto):", "", phone_url, flags=re.IGNORECASE).strip()
     phone = urllib.parse.unquote(phone)
-    
+
     # Strip everything after the first , or #
-    idx_comma = phone.find(',')
-    idx_hash = phone.find('#')
+    idx_comma = phone.find(",")
+    idx_hash = phone.find("#")
     if idx_comma == -1:
         idx = idx_hash
     elif idx_hash == -1:
@@ -524,7 +368,7 @@ def dial(phone_url):
         idx = min(idx_comma, idx_hash)
     if idx != -1:
         phone = phone[:idx].strip()
-    
+
     plus = "+" if phone.startswith("+") else ""
     digits = re.sub(r"\D", "", phone)
     phone = plus + digits
@@ -586,7 +430,7 @@ def main():
     args = parser.parse_args()
 
     if args.install:
-        install_executable()
+        install()
     elif args.uninstall:
         uninstall()
     elif args.register:
