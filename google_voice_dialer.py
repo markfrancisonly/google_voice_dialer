@@ -45,7 +45,7 @@ PROG_ID = "Google Voice Dialer"
 PROG_NAME = f"{PROG_ID}"
 PROG_DESC = "Google Voice tel: protocol handler. Dial phone numbers using Google Voice."
 LOG_FILENAME = f"{PROG_ID}.log"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 
 def find_google_voice_shortcut():
@@ -455,3 +455,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
