@@ -19,8 +19,8 @@ if (window.top !== window.self) {
       'TIME', 'DATA', 'METER', 'PROGRESS', 'MATH'
     ]);
 
-    // Soft limit so we don't explode on massive pages
-    const MAX_TEXT_NODES_TO_PROCESS = 25000;
+    // Lowered soft limit to reduce memory on massive pages
+    const MAX_TEXT_NODES_TO_PROCESS = 15000;
 
     // Cache for visibility results to avoid repeated getComputedStyle calls
     const visibilityCache = new WeakMap();
@@ -30,6 +30,9 @@ if (window.top !== window.self) {
     const mutationRoots = new Set();
     let processedTextNodeCount = 0;
     let stoppedDueToLimit = false;
+
+    // Debug flag (set to false for production to remove logs)
+    const DEBUG = false;
 
     const scheduleIdle = (fn) => {
       if (typeof requestIdleCallback === 'function') {
@@ -96,6 +99,7 @@ if (window.top !== window.self) {
     function normalizePhoneForTel(phone) {
       const hadPlus = phone.trim().startsWith('+');
       const digits = phone.replace(/\D/g, '');
+      if (digits == phone) return null; // require at least one non-digit
       // phone digits 7..15 is reasonable (E.164 max 15)
       if (digits.length < 7 || digits.length > 15) return null;
       if (isProbablyCreditCard(digits)) return null; // avoid CC-like numbers
@@ -133,7 +137,7 @@ if (window.top !== window.self) {
       if (stoppedDueToLimit) return;
       if (processedTextNodeCount > MAX_TEXT_NODES_TO_PROCESS) {
         stoppedDueToLimit = true;
-        console.warn('phone-linkifier: reached processing limit, stopping further scans');
+        if (DEBUG) console.warn('phone-linkifier: reached processing limit, stopping further scans');
         return;
       }
 
@@ -156,34 +160,39 @@ if (window.top !== window.self) {
       const frag = document.createDocumentFragment();
       let anyMatch = false;
 
-      while ((match = PHONE_REGEX.exec(text)) !== null) {
-        if (stoppedDueToLimit) break;
+      try {
+        while ((match = PHONE_REGEX.exec(text)) !== null) {
+          if (stoppedDueToLimit) break;
 
-        const phoneText = match[0];
-        const start = match.index;
-        const end = start + phoneText.length;
+          const phoneText = match[0];
+          const start = match.index;
+          const end = start + phoneText.length;
 
-        // append leading text
-        if (start > lastIndex) {
-          frag.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+          // append leading text
+          if (start > lastIndex) {
+            frag.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+          }
+
+          const tel = normalizePhoneForTel(phoneText);
+          if (tel) {
+            // create anchor
+            const a = document.createElement('a');
+            a.setAttribute('href', `tel:${tel}`);
+            a.textContent = phoneText;
+            // mark it so future scans don't try to re-linkify
+            a.dataset.telLinkifier = '1';
+            frag.appendChild(a);
+            anyMatch = true;
+          } else {
+            // not a validated phone -> plain text
+            frag.appendChild(document.createTextNode(phoneText));
+          }
+
+          lastIndex = end;
         }
-
-        const tel = normalizePhoneForTel(phoneText);
-        if (tel) {
-          // create anchor
-          const a = document.createElement('a');
-          a.setAttribute('href', `tel:${tel}`);
-          a.textContent = phoneText;
-          // mark it so future scans don't try to re-linkify
-          a.dataset.telLinkifier = '1';
-          frag.appendChild(a);
-          anyMatch = true;
-        } else {
-          // not a validated phone -> plain text
-          frag.appendChild(document.createTextNode(phoneText));
-        }
-
-        lastIndex = end;
+      } catch (err) {
+        if (DEBUG) console.warn('phone-linkifier: regex exec error', err);
+        return;
       }
 
       if (anyMatch) {
@@ -195,6 +204,7 @@ if (window.top !== window.self) {
           parent.replaceChild(frag, textNode);
         } catch (err) {
           // might fail if DOM changed — ignore
+          if (DEBUG) console.debug('phone-linkifier: replaceChild failed', err);
           return;
         }
       }
@@ -215,6 +225,7 @@ if (window.top !== window.self) {
         }
       } catch (err) {
         // TreeWalker may throw on unusual roots; ignore
+        if (DEBUG) console.debug('phone-linkifier: TreeWalker error', err);
       }
       return nodes;
     }
@@ -240,7 +251,7 @@ if (window.top !== window.self) {
       if (stoppedDueToLimit) return;
       const nodes = collectTextNodes(root);
       if (nodes.length === 0) return;
-      processNodesInBatches(nodes, 300);
+      processNodesInBatches(nodes);
     }
 
     function processDocumentInitial() {
@@ -275,6 +286,8 @@ if (window.top !== window.self) {
         if (m.type === 'childList') {
           for (const added of m.addedNodes) {
             if (!added) continue;
+            // Skip if this is our own link (prevents potential loops)
+            if (added.nodeType === Node.ELEMENT_NODE && added.dataset && added.dataset.telLinkifier) continue;
             // For text nodes, add the parent
             if (added.nodeType === Node.TEXT_NODE) {
               mutationRoots.add(added.parentElement || added);
@@ -293,11 +306,16 @@ if (window.top !== window.self) {
 
     // Start observing after body exists (or wait for DOMContentLoaded)
     function startObserver() {
+      if (!document.body) {
+        if (DEBUG) console.debug('phone-linkifier: document.body not available yet, delaying observer start');
+        setTimeout(startObserver, 50); // Retry after a short delay
+        return;
+      }
       try {
         observer.observe(document.body, { childList: true, subtree: true, characterData: true });
       } catch (err) {
         // if something goes wrong, bail silently
-        console.warn('phone-linkifier: observer failed to start', err);
+        if (DEBUG) console.warn('phone-linkifier: observer failed to start', err);
       }
     }
 

@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Phone Number Linkifier",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Detects visible phone numbers in web pages and converts them into clickable TEL links for high performance.",
-  "permissions": ["activeTab", "scripting"],
-
+  "permissions": ["activeTab", "scripting", "contextMenus"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "icons": {
     "16": "icon16.png",
     "48": "icon48.png",
