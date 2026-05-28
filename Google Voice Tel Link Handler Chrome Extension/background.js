@@ -2,20 +2,29 @@ const GOOGLE_VOICE_HOME_URL = 'https://voice.google.com/';
 const GOOGLE_VOICE_CALL_URL = 'https://voice.google.com/u/0/calls?a=nc,';
 const GOOGLE_VOICE_URL_PATTERN = 'https://voice.google.com/*';
 const TARGET_STORAGE_KEY = 'googleVoiceTarget';
+const BOUNDS_STORAGE_KEY = 'googleVoicePopupBounds';
 const POPUP_WIDTH = 520;
 const POPUP_HEIGHT = 680;
+const MIN_POPUP_WIDTH = 320;
+const MIN_POPUP_HEIGHT = 360;
+const MAX_POPUP_WIDTH = 1200;
+const MAX_POPUP_HEIGHT = 1200;
 
-function getFromStorage(defaultValue) {
+function getStorageValue(key, defaultValue) {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ [TARGET_STORAGE_KEY]: defaultValue }, (result) => {
+    chrome.storage.local.get({ [key]: defaultValue }, (result) => {
       if (chrome.runtime.lastError) {
         resolve(defaultValue);
         return;
       }
 
-      resolve(result[TARGET_STORAGE_KEY]);
+      resolve(result[key]);
     });
   });
+}
+
+function getFromStorage(defaultValue) {
+  return getStorageValue(TARGET_STORAGE_KEY, defaultValue);
 }
 
 function saveTarget(tab) {
@@ -27,6 +36,38 @@ function saveTarget(tab) {
         tabId: tab.id,
         windowId: tab.windowId
       }
+    }, resolve);
+  });
+}
+
+function isUsablePopupBounds(bounds) {
+  return (
+    bounds &&
+    typeof bounds.width === 'number' &&
+    typeof bounds.height === 'number' &&
+    bounds.width > 0 &&
+    bounds.height > 0
+  );
+}
+
+function clamp(number, min, max) {
+  return Math.min(Math.max(number, min), max);
+}
+
+function normalizePopupSize(bounds) {
+  return {
+    width: clamp(Math.round(bounds.width), MIN_POPUP_WIDTH, MAX_POPUP_WIDTH),
+    height: clamp(Math.round(bounds.height), MIN_POPUP_HEIGHT, MAX_POPUP_HEIGHT)
+  };
+}
+
+function savePopupBounds(bounds) {
+  if (!isUsablePopupBounds(bounds)) return Promise.resolve();
+  const popupSize = normalizePopupSize(bounds);
+
+  return new Promise((resolve) => {
+    chrome.storage.local.set({
+      [BOUNDS_STORAGE_KEY]: popupSize
     }, resolve);
   });
 }
@@ -93,10 +134,44 @@ function getWindow(windowId) {
   });
 }
 
-async function getCenteredPopupBounds(openerWindowId) {
-  const bounds = {
+async function getSavedPopupSize() {
+  const savedBounds = await getStorageValue(BOUNDS_STORAGE_KEY, null);
+  if (isUsablePopupBounds(savedBounds)) {
+    return normalizePopupSize(savedBounds);
+  }
+
+  return {
     width: POPUP_WIDTH,
     height: POPUP_HEIGHT
+  };
+}
+
+async function getCurrentGoogleVoicePopupSize() {
+  const storedTarget = await getFromStorage(null);
+  if (storedTarget && typeof storedTarget.windowId === 'number') {
+    const currentWindow = await getWindow(storedTarget.windowId);
+    if (
+      currentWindow &&
+      currentWindow.type === 'popup' &&
+      (!currentWindow.state || currentWindow.state === 'normal') &&
+      isUsablePopupBounds(currentWindow)
+    ) {
+      return normalizePopupSize(currentWindow);
+    }
+  }
+
+  return null;
+}
+
+async function getPreferredPopupSize() {
+  return await getCurrentGoogleVoicePopupSize() || await getSavedPopupSize();
+}
+
+async function getCenteredPopupBounds(openerWindowId) {
+  const popupSize = await getPreferredPopupSize();
+  const bounds = {
+    width: popupSize.width,
+    height: popupSize.height
   };
 
   if (typeof openerWindowId !== 'number') return bounds;
@@ -112,13 +187,13 @@ async function getCenteredPopupBounds(openerWindowId) {
     return bounds;
   }
 
-  bounds.left = Math.round(openerWindow.left + (openerWindow.width - POPUP_WIDTH) / 2);
-  bounds.top = Math.round(openerWindow.top + (openerWindow.height - POPUP_HEIGHT) / 2);
+  bounds.left = Math.round(openerWindow.left + (openerWindow.width - popupSize.width) / 2);
+  bounds.top = Math.round(openerWindow.top + (openerWindow.height - popupSize.height) / 2);
   return bounds;
 }
 
-function createPopupWindow(url, openerWindowId) {
-  return getCenteredPopupBounds(openerWindowId).then((bounds) => new Promise((resolve, reject) => {
+function createChromePopupWindow(url, bounds) {
+  return new Promise((resolve, reject) => {
     const createData = {
       url,
       type: 'popup',
@@ -137,7 +212,22 @@ function createPopupWindow(url, openerWindowId) {
 
       resolve(createdWindow && createdWindow.tabs ? createdWindow.tabs[0] : null);
     });
-  }));
+  });
+}
+
+async function createPopupWindow(url, openerWindowId) {
+  const bounds = await getCenteredPopupBounds(openerWindowId);
+
+  try {
+    return await createChromePopupWindow(url, bounds);
+  } catch (err) {
+    if (bounds.width === POPUP_WIDTH && bounds.height === POPUP_HEIGHT) throw err;
+
+    return await createChromePopupWindow(url, {
+      width: POPUP_WIDTH,
+      height: POPUP_HEIGHT
+    });
+  }
 }
 
 async function findLastGoogleVoiceTarget() {
@@ -213,3 +303,25 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     sender.tab && sender.tab.windowId
   ).catch((err) => console.error('Could not open Google Voice call:', err));
 });
+
+if (chrome.windows && chrome.windows.onBoundsChanged) {
+  chrome.windows.onBoundsChanged.addListener((currentWindow) => {
+    if (
+      !currentWindow ||
+      typeof currentWindow.id !== 'number' ||
+      currentWindow.type !== 'popup' ||
+      (currentWindow.state && currentWindow.state !== 'normal') ||
+      !isUsablePopupBounds(currentWindow)
+    ) {
+      return;
+    }
+
+    getFromStorage(null)
+      .then((storedTarget) => {
+        if (storedTarget && storedTarget.windowId === currentWindow.id) {
+          return savePopupBounds(currentWindow);
+        }
+      })
+      .catch((err) => console.error('Could not save Google Voice popup size:', err));
+  });
+}
