@@ -30,7 +30,7 @@
     {
       id: 'international',
       label: 'International',
-      example: '+44 20 7946 0958',
+      example: '+44 20 7008 3100',
       description: 'Numbers outside US and Canada that start with a plus sign.',
       defaultEnabled: true
     },
