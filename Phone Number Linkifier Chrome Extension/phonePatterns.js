@@ -6,61 +6,71 @@
 
   const PATTERN_DEFINITIONS = [
     {
-      id: 'nanpParentheses',
-      label: 'Parentheses',
-      example: '(555) 123-4567',
-      description: 'US/Canada numbers with a parenthesized area code.'
-    },
-    {
-      id: 'nanpDashes',
-      label: 'Dashes',
-      example: '555-123-4567',
-      description: 'US/Canada numbers separated by hyphens.'
-    },
-    {
-      id: 'nanpDots',
-      label: 'Dots',
-      example: '555.123.4567',
-      description: 'US/Canada numbers separated by periods.'
-    },
-    {
-      id: 'nanpSpaces',
-      label: 'Spaces',
-      example: '555 123 4567',
-      description: 'US/Canada numbers separated by spaces.'
-    },
-    {
-      id: 'localSevenDigit',
-      label: 'Local',
-      example: '555-1212',
-      description: 'Seven-digit local numbers.'
-    },
-    {
-      id: 'digitOnly',
-      label: 'Digits only',
-      example: '5551234567',
-      description: 'Ten- or eleven-digit numbers with no separators.'
+      id: 'nanp',
+      label: 'US / Canada',
+      example: '(650) 618-1499',
+      description: 'North American numbers with spaces, dots, dashes, parentheses, or digits only.',
+      modeSetting: 'nanpMode',
+      modes: [
+        {
+          value: 'strict',
+          label: 'Strict'
+        },
+        {
+          value: 'recommended',
+          label: 'Recommended'
+        },
+        {
+          value: 'promiscuous',
+          label: 'Promiscuous'
+        }
+      ],
+      defaultEnabled: true
     },
     {
       id: 'international',
       label: 'International',
       example: '+44 20 7946 0958',
-      description: 'International numbers starting with a plus sign.'
+      description: 'Numbers outside US and Canada that start with a plus sign.',
+      defaultEnabled: true
+    },
+    {
+      id: 'local',
+      label: 'Local',
+      example: '555-1212',
+      description: 'Seven-digit local numbers.',
+      defaultEnabled: false
     },
     {
       id: 'vanity',
       label: 'Vanity',
       example: '1-800-FLOWERS',
-      description: 'Toll-free numbers containing letters.'
+      description: 'Toll-free numbers containing letters.',
+      defaultEnabled: true
     }
   ];
 
   const DEFAULT_SETTINGS = PATTERN_DEFINITIONS.reduce((settings, pattern) => {
-    settings[pattern.id] = true;
+    settings[pattern.id] = pattern.defaultEnabled !== false;
+    if (pattern.modeSetting) {
+      settings[pattern.modeSetting] = 'recommended';
+    }
     return settings;
   }, {});
 
   const MAX_GOOGLE_VOICE_INPUT_LENGTH = 120;
+  const PHONE_SEPARATOR_CHARS = '\\s.\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212';
+  const PHONE_SEPARATOR = `[${PHONE_SEPARATOR_CHARS}]`;
+  const PHONE_PROMISCUOUS_SEPARATOR_CHARS = `${PHONE_SEPARATOR_CHARS}/\\u00b7`;
+  const PHONE_PROMISCUOUS_SEPARATOR = `[${PHONE_PROMISCUOUS_SEPARATOR_CHARS}]`;
+  const PHONE_PROMISCUOUS_SEPARATOR_RUN = `${PHONE_PROMISCUOUS_SEPARATOR}+`;
+  const PHONE_DASH = '[\\-\\u2010\\u2011\\u2012\\u2013\\u2014\\u2212]';
+  const NANP_MODE_VALUES = new Set(['strict', 'recommended', 'promiscuous']);
+  const NANP_STRICT_PREFIX = `(?:\\+?1${PHONE_SEPARATOR})?`;
+  const NANP_STRICT_PAREN = `\\(\\s*\\d{3}\\s*\\)\\s+\\d{3}(?:${PHONE_DASH}|\\.|\\s+)\\d{4}`;
+  const NANP_STRICT_DASHES = `\\d{3}${PHONE_DASH}\\d{3}${PHONE_DASH}\\d{4}`;
+  const NANP_STRICT_DOTS = '\\d{3}\\.\\d{3}\\.\\d{4}';
+  const NANP_STRICT_SPACES = '\\d{3}\\s+\\d{3}\\s+\\d{4}';
 
   const LETTER_MAP = {
     A: '2', B: '2', C: '2',
@@ -73,45 +83,97 @@
     W: '9', X: '9', Y: '9', Z: '9'
   };
 
+  const NANP_MATCHERS = {
+    strict: {
+      id: 'nanp',
+      regex: new RegExp(`(?:^|[^\\d+])(${NANP_STRICT_PREFIX}(?:${NANP_STRICT_PAREN}|${NANP_STRICT_DASHES}|${NANP_STRICT_DOTS}|${NANP_STRICT_SPACES}))(?!\\d)`, 'g'),
+      captureGroup: 1
+    },
+    recommended: {
+      id: 'nanp',
+      regex: new RegExp(`(?:^|[^\\d+])((?:\\+?1${PHONE_SEPARATOR}?)?(?:\\(\\s*\\d{3}\\s*\\)|\\d{3})${PHONE_SEPARATOR}?\\d{3}${PHONE_SEPARATOR}?\\d{4})(?!\\d)`, 'g'),
+      captureGroup: 1
+    },
+    promiscuous: {
+      id: 'nanp',
+      regex: new RegExp(`(?:^|[^\\d+])((?:\\+?${PHONE_PROMISCUOUS_SEPARATOR}*1${PHONE_PROMISCUOUS_SEPARATOR}*)?(?:(?:\\(\\s*\\d{3}\\s*\\)|\\d{3})${PHONE_PROMISCUOUS_SEPARATOR}*\\d{3}${PHONE_PROMISCUOUS_SEPARATOR}*\\d{4}|\\d{3}${PHONE_PROMISCUOUS_SEPARATOR_RUN}\\d{3}${PHONE_PROMISCUOUS_SEPARATOR_RUN}\\d{4}))(?!\\d)`, 'g'),
+      captureGroup: 1
+    }
+  };
+
   const MATCHERS = [
     {
       id: 'international',
-      regex: /\+\d{1,3}[\s.-](?:\d{1,4}[\s.-]){1,4}\d{2,4}/g
+      regex: new RegExp(`\\+(?!1(?:\\D|$))\\d{1,3}${PHONE_SEPARATOR}(?:\\d{1,4}${PHONE_SEPARATOR}){1,4}\\d{2,4}`, 'g')
+    },
+    {
+      id: 'local',
+      regex: new RegExp(`(?:^|[^\\d${PHONE_SEPARATOR_CHARS}])(\\d{3}${PHONE_SEPARATOR}\\d{4})(?![\\d${PHONE_SEPARATOR_CHARS}])`, 'g'),
+      captureGroup: 1
     },
     {
       id: 'vanity',
-      regex: /(?:\+?1[-.\s]?)?(?:800|888|877|866|855|844|833|822)[-.\s]?[A-Za-z0-9]{3}[-.\s]?[A-Za-z0-9]{4}/g
-    },
-    {
-      id: 'nanpParentheses',
-      regex: /(?:\+?1[-.\s]?)?\(\s*\d{3}\s*\)\s*\d{3}[-.\s]?\d{4}/g
-    },
-    {
-      id: 'nanpDashes',
-      regex: /(?:\+?1[-.\s]?)?\d{3}-\d{3}-\d{4}/g
-    },
-    {
-      id: 'nanpDots',
-      regex: /(?:\+?1[-.\s]?)?\d{3}\.\d{3}\.\d{4}/g
-    },
-    {
-      id: 'nanpSpaces',
-      regex: /(?:\+?1\s+)?\d{3}\s+\d{3}\s+\d{4}/g
-    },
-    {
-      id: 'digitOnly',
-      regex: /(?:^|[^\d+])(\+?1?\d{10})(?!\d)/g,
-      captureGroup: 1
-    },
-    {
-      id: 'localSevenDigit',
-      regex: /(?:^|[^\d.-])(\d{3}[-.]\d{4})(?![\d.-])/g,
-      captureGroup: 1
+      regex: new RegExp(`(?:\\+?1${PHONE_SEPARATOR}?)?(?:800|888|877|866|855|844|833|822)${PHONE_SEPARATOR}?[A-Za-z0-9]{3}${PHONE_SEPARATOR}?[A-Za-z0-9]{4}`, 'g')
     }
   ];
 
+  function hasPromiscuousNanpSignal(text) {
+    return /\+\s+1/.test(text) ||
+      /[\/\u00b7]/.test(text) ||
+      /\d\s+[.\-\u2010\u2011\u2012\u2013\u2014\u2212]\s+\d/.test(text);
+  }
+
+  function getNanpMatcher(settings, text) {
+    if (!settings.nanp) return null;
+    if (settings.nanpMode !== 'promiscuous') {
+      return NANP_MATCHERS[settings.nanpMode] || NANP_MATCHERS.recommended;
+    }
+
+    return hasPromiscuousNanpSignal(text)
+      ? NANP_MATCHERS.promiscuous
+      : NANP_MATCHERS.recommended;
+  }
+
   function mergeSettings(settings) {
-    return Object.assign({}, DEFAULT_SETTINGS, settings || {});
+    const source = settings || {};
+    const merged = Object.assign({}, DEFAULT_SETTINGS, source);
+
+    if (typeof source.nanp !== 'boolean') {
+      const legacyNanpKeys = [
+        'nanpParentheses',
+        'nanpDashes',
+        'nanpDots',
+        'nanpSpaces',
+        'digitOnly'
+      ];
+      const legacyNanpValues = legacyNanpKeys
+        .filter((key) => typeof source[key] === 'boolean')
+        .map((key) => source[key]);
+
+      if (legacyNanpValues.length > 0) {
+        merged.nanp = legacyNanpValues.some(Boolean);
+      }
+    }
+
+    if (typeof source.local !== 'boolean' && typeof source.localSevenDigit === 'boolean') {
+      merged.local = source.localSevenDigit;
+    }
+
+    if (merged.nanpMode === 'minimal') {
+      merged.nanpMode = 'strict';
+    } else if (
+      merged.nanpMode === 'standard' ||
+      merged.nanpMode === 'balanced' ||
+      merged.nanpMode === 'flexible'
+    ) {
+      merged.nanpMode = 'recommended';
+    }
+
+    if (!NANP_MODE_VALUES.has(merged.nanpMode)) {
+      merged.nanpMode = DEFAULT_SETTINGS.nanpMode;
+    }
+
+    return merged;
   }
 
   function mapVanityLetters(phone) {
@@ -151,18 +213,41 @@
 
     if (digits.length < 7 || digits.length > 15) return null;
     if (isProbablyCreditCard(digits)) return null;
-    if (patternId === 'digitOnly' && !(digits.length === 10 || digits.length === 11)) return null;
-    if (patternId === 'localSevenDigit' && digits.length !== 7) return null;
-    if (patternId !== 'international' && hadPlus && digits.length < 11) return null;
+
+    if (patternId === 'nanp') {
+      if (!hasBalancedParentheses(trimmed)) return null;
+      if (digits.length === 11 && digits.startsWith('1')) {
+        return (hadPlus ? '+' : '') + digits;
+      }
+      if (digits.length === 10 && !hadPlus) {
+        return digits;
+      }
+      return null;
+    }
+
+    if (patternId === 'international') {
+      if (!hadPlus || digits.startsWith('1')) return null;
+      return '+' + digits;
+    }
+
+    if (patternId === 'local') {
+      return digits.length === 7 ? digits : null;
+    }
+
+    if (patternId === 'vanity') {
+      if (!(digits.length === 10 || (digits.length === 11 && digits.startsWith('1')))) return null;
+    }
 
     return (hadPlus ? '+' : '') + digits;
   }
 
   function collectMatches(text, settings) {
     const enabled = mergeSettings(settings);
+    const nanpMatcher = getNanpMatcher(enabled, text);
+    const matchers = nanpMatcher ? [nanpMatcher, ...MATCHERS] : MATCHERS;
     const matches = [];
 
-    for (const matcher of MATCHERS) {
+    for (const matcher of matchers) {
       if (!enabled[matcher.id]) continue;
 
       matcher.regex.lastIndex = 0;
@@ -171,6 +256,9 @@
         const phoneText = matcher.captureGroup ? match[matcher.captureGroup] : match[0];
         const relativeIndex = matcher.captureGroup ? match[0].indexOf(phoneText) : 0;
         const start = match.index + relativeIndex;
+        if (matcher.id === 'nanp' && start > 0 && /\+\s*$/.test(text.slice(Math.max(0, start - 4), start))) {
+          continue;
+        }
         const tel = normalizeMatch(phoneText, matcher.id);
 
         if (tel) {

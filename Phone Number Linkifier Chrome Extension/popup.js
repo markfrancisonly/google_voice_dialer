@@ -17,6 +17,11 @@ function getFormSettings() {
   for (const pattern of PhonePatternSettings.PATTERN_DEFINITIONS) {
     const input = patternsForm.elements[pattern.id];
     settings[pattern.id] = Boolean(input && input.checked);
+
+    if (pattern.modeSetting) {
+      const modeInput = patternsForm.elements[pattern.modeSetting];
+      settings[pattern.modeSetting] = modeInput ? modeInput.value : settings[pattern.modeSetting];
+    }
   }
   return settings;
 }
@@ -62,6 +67,42 @@ function renderPatterns(settings) {
 
     title.append(name, example);
     details.append(title, description);
+
+    if (pattern.modeSetting && Array.isArray(pattern.modes)) {
+      const modeRow = document.createElement('span');
+      modeRow.className = 'pattern-mode';
+
+      const modeLabel = document.createElement('span');
+      modeLabel.className = 'pattern-mode-label';
+      modeLabel.textContent = 'Matching';
+
+      const modeSelect = document.createElement('select');
+      modeSelect.name = pattern.modeSetting;
+      modeSelect.disabled = !checkbox.checked;
+      modeSelect.addEventListener('click', (event) => {
+        event.stopPropagation();
+      });
+
+      for (const mode of pattern.modes) {
+        const option = document.createElement('option');
+        option.value = mode.value;
+        option.textContent = mode.label;
+        option.selected = settings[pattern.modeSetting] === mode.value;
+        modeSelect.append(option);
+      }
+
+      checkbox.addEventListener('change', () => {
+        modeSelect.disabled = !checkbox.checked;
+      });
+      modeSelect.addEventListener('change', (event) => {
+        event.stopPropagation();
+        saveFormSettings();
+      });
+
+      modeRow.append(modeLabel, modeSelect);
+      details.append(modeRow);
+    }
+
     label.append(checkbox, details);
     patternsForm.append(label);
   }

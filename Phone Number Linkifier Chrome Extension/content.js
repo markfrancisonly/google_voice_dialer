@@ -22,6 +22,11 @@ if (window.top !== window.self) {
 
     // Lowered soft limit to reduce memory on massive pages
     const MAX_TEXT_NODES_TO_PROCESS = 15000;
+    const MAX_INLINE_RUN_CONTAINERS_TO_PROCESS = 1200;
+    const MAX_INLINE_RUN_TEXT_LENGTH = 240;
+    const MAX_INLINE_RUN_TEXT_NODES = 24;
+    const INLINE_RUN_ASCEND_LIMIT = 5;
+    const MAX_PROMISCUOUS_ANCHORS_TO_PROCESS = 400;
 
     // Cache for visibility results to avoid repeated getComputedStyle calls
     const visibilityCache = new WeakMap();
@@ -30,7 +35,11 @@ if (window.top !== window.self) {
     let mutationTimer = null;
     const mutationRoots = new Set();
     let scannedTextNodeCount = 0;
+    let scannedInlineRunContainerCount = 0;
+    let scannedPromiscuousAnchorCount = 0;
     let stoppedDueToLimit = false;
+    let processedInlineRunContainers = new WeakSet();
+    let processedPromiscuousAnchors = new WeakSet();
 
     // Debug flag (set to false for production to remove logs)
     const DEBUG = false;
@@ -193,8 +202,184 @@ if (window.top !== window.self) {
       return nodes;
     }
 
+    function getInlineRunContainer(textNode) {
+      if (!textNode || !textNode.parentElement || !/\d/.test(textNode.data || '')) return null;
+
+      let element = textNode.parentElement;
+      let best = null;
+      let depth = 0;
+      while (element && element !== document.body && depth < INLINE_RUN_ASCEND_LIMIT) {
+        if (SKIP_TAGS.has(element.tagName) || element.isContentEditable) break;
+        if (typeof element.closest === 'function' && element.closest('a')) break;
+
+        const text = element.textContent || '';
+        if (text.length > MAX_INLINE_RUN_TEXT_LENGTH) break;
+        if (/\d/.test(text) && phonePatterns.findPhoneMatches(text, activePatternSettings).length > 0) {
+          best = element;
+        }
+
+        element = element.parentElement;
+        depth++;
+      }
+
+      return best;
+    }
+
+    function collectInlineRunContainers(textNodes) {
+      const containers = [];
+      const seen = new Set();
+
+      for (const textNode of textNodes) {
+        if (containers.length >= MAX_INLINE_RUN_CONTAINERS_TO_PROCESS) break;
+
+        const container = getInlineRunContainer(textNode);
+        if (!container || seen.has(container)) continue;
+
+        seen.add(container);
+        containers.push(container);
+      }
+
+      return containers;
+    }
+
+    function getTextPosition(nodeMap, index) {
+      for (const item of nodeMap) {
+        if (index >= item.start && index <= item.end) {
+          return {
+            node: item.node,
+            offset: Math.min(index - item.start, item.node.data.length)
+          };
+        }
+      }
+      return null;
+    }
+
+    function linkifyInlineRunContainer(container) {
+      if (stoppedDueToLimit || !container || !container.isConnected) return;
+      if (processedInlineRunContainers.has(container)) return;
+      processedInlineRunContainers.add(container);
+
+      if (scannedInlineRunContainerCount >= MAX_INLINE_RUN_CONTAINERS_TO_PROCESS) return;
+      scannedInlineRunContainerCount++;
+
+      if (!isVisibleEnough(container)) return;
+      if (typeof container.closest === 'function' && container.closest('a')) return;
+
+      const textNodes = [];
+      let text = '';
+
+      try {
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+        let node;
+        while ((node = walker.nextNode())) {
+          if (shouldSkipTextNode(node)) continue;
+          if (!node.data) continue;
+
+          const nextLength = text.length + node.data.length;
+          if (nextLength > MAX_INLINE_RUN_TEXT_LENGTH) return;
+
+          textNodes.push({
+            node,
+            start: text.length,
+            end: nextLength
+          });
+          if (textNodes.length > MAX_INLINE_RUN_TEXT_NODES) return;
+
+          text += node.data;
+        }
+      } catch (err) {
+        if (DEBUG) console.debug('phone-linkifier: inline TreeWalker error', err);
+        return;
+      }
+
+      if (textNodes.length < 2 || !/\d/.test(text)) return;
+
+      const matches = phonePatterns.findPhoneMatches(text, activePatternSettings);
+      if (matches.length === 0) return;
+
+      for (let i = matches.length - 1; i >= 0; i--) {
+        const match = matches[i];
+        const startPosition = getTextPosition(textNodes, match.start);
+        const endPosition = getTextPosition(textNodes, match.end);
+
+        if (!startPosition || !endPosition) continue;
+        if (startPosition.node === endPosition.node) continue;
+        if (!startPosition.node.isConnected || !endPosition.node.isConnected) continue;
+
+        try {
+          const range = document.createRange();
+          range.setStart(startPosition.node, startPosition.offset);
+          range.setEnd(endPosition.node, endPosition.offset);
+
+          const a = document.createElement('a');
+          a.setAttribute('href', `tel:${match.tel}`);
+          a.dataset.telLinkifier = '1';
+          a.appendChild(range.extractContents());
+          range.insertNode(a);
+        } catch (err) {
+          if (DEBUG) console.debug('phone-linkifier: inline linkify failed', err);
+        }
+      }
+    }
+
+    function processInlineRunContainersInBatches(containers, batchSize = 40) {
+      if (!containers || containers.length === 0) return;
+
+      let i = 0;
+      function step(deadline) {
+        const hasIdleBudget = deadline && typeof deadline.timeRemaining === 'function';
+        const end = Math.min(containers.length, i + batchSize);
+
+        for (; i < end; i++) {
+          if (hasIdleBudget && deadline.timeRemaining() < 4) break;
+          linkifyInlineRunContainer(containers[i]);
+        }
+
+        if (i < containers.length && !stoppedDueToLimit) {
+          scheduleIdle(step);
+        }
+      }
+      scheduleIdle(step);
+    }
+
+    function canConvertAnchorTextToPhone(text, match) {
+      if (!text || text.length > 80 || !match) return false;
+
+      const before = text.slice(0, match.start).trim();
+      const after = text.slice(match.end).trim();
+      return /^(?:phone|tel|call|fax)?\s*:?\s*$/i.test(before) && !after;
+    }
+
+    function processPromiscuousPhoneAnchors(root) {
+      if (!root || root.nodeType !== Node.ELEMENT_NODE) return;
+
+      const anchors = root.matches && root.matches('a')
+        ? [root]
+        : Array.from(root.querySelectorAll('a'));
+
+      for (const anchor of anchors) {
+        if (scannedPromiscuousAnchorCount >= MAX_PROMISCUOUS_ANCHORS_TO_PROCESS) return;
+        if (!anchor || processedPromiscuousAnchors.has(anchor)) continue;
+        processedPromiscuousAnchors.add(anchor);
+        scannedPromiscuousAnchorCount++;
+
+        const href = anchor.getAttribute('href') || '';
+        if (href.toLowerCase().startsWith('tel:')) continue;
+        if (!isVisibleEnough(anchor)) continue;
+
+        const text = (anchor.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!/\d/.test(text) || text.length > 80) continue;
+
+        const matches = phonePatterns.findPhoneMatches(text, activePatternSettings);
+        if (matches.length !== 1 || !canConvertAnchorTextToPhone(text, matches[0])) continue;
+
+        anchor.setAttribute('href', `tel:${matches[0].tel}`);
+        anchor.dataset.telLinkifier = '1';
+      }
+    }
+
     // Process nodes in non-blocking batches
-    function processNodesInBatches(nodes, batchSize = 250) {
+    function processNodesInBatches(nodes, onComplete, batchSize = 250) {
       let i = 0;
       function step(deadline) {
         const hasIdleBudget = deadline && typeof deadline.timeRemaining === 'function';
@@ -207,6 +392,8 @@ if (window.top !== window.self) {
 
         if (i < nodes.length && !stoppedDueToLimit) {
           scheduleIdle(step);
+        } else if (typeof onComplete === 'function' && !stoppedDueToLimit) {
+          onComplete();
         }
       }
       scheduleIdle(step);
@@ -214,9 +401,21 @@ if (window.top !== window.self) {
 
     function processRoot(root) {
       if (stoppedDueToLimit) return;
+      const settings = phonePatterns.mergeSettings(activePatternSettings);
+      const isPromiscuousNanp = settings.nanp && settings.nanpMode === 'promiscuous';
+
+      if (isPromiscuousNanp) {
+        processPromiscuousPhoneAnchors(root);
+      }
+
       const nodes = collectTextNodes(root);
       if (nodes.length === 0) return;
-      processNodesInBatches(nodes);
+      const inlineRunContainers = isPromiscuousNanp
+        ? collectInlineRunContainers(nodes)
+        : [];
+      processNodesInBatches(nodes, () => {
+        processInlineRunContainersInBatches(inlineRunContainers);
+      });
     }
 
     function processDocumentInitial() {
@@ -237,7 +436,11 @@ if (window.top !== window.self) {
 
     function resetProcessingState() {
       scannedTextNodeCount = 0;
+      scannedInlineRunContainerCount = 0;
+      scannedPromiscuousAnchorCount = 0;
       stoppedDueToLimit = false;
+      processedInlineRunContainers = new WeakSet();
+      processedPromiscuousAnchors = new WeakSet();
     }
 
     function getContextMenuLinkUrl(eventTarget) {

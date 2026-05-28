@@ -43,6 +43,21 @@ button:hover {
   background: #eef2f7;
 }
 
+select {
+  min-height: 28px;
+  border: 1px solid #c6ccd8;
+  border-radius: 6px;
+  padding: 3px 8px;
+  color: #172033;
+  background: #ffffff;
+  font: inherit;
+}
+
+select:disabled {
+  color: #7b8493;
+  background: #eef2f7;
+}
+
 .patterns {
   display: grid;
   gap: 8px;
@@ -87,6 +102,20 @@ button:hover {
   margin: 0;
   color: #5d687a;
   font-size: 12px;
+}
+
+.pattern-mode {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.pattern-mode-label {
+  color: #445066;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .status {

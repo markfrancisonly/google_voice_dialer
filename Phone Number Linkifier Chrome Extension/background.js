@@ -5,8 +5,8 @@ importScripts('phonePatterns.js');
 const GOOGLE_VOICE_CALL_URL = 'https://voice.google.com/u/0/calls?a=nc,';
 const POPUP_WIDTH = 520;
 const POPUP_HEIGHT = 680;
+const MAX_SELECTED_GOOGLE_VOICE_INPUT_LENGTH = 120;
 const MENU_CALL_SELECTION = 'callPhone';
-const MENU_CALL_TEL_LINK = 'callTelLink';
 
 function buildGoogleVoiceCallUrl(tel) {
   return GOOGLE_VOICE_CALL_URL + encodeURIComponent(tel);
@@ -85,10 +85,20 @@ function extractTelLinkText(linkUrl) {
   return phone;
 }
 
-async function normalizePhoneText(phoneText, options) {
-  const settings = await PhonePatternSettings.loadSettings();
-  return PhonePatternSettings.sanitizeGoogleVoicePhoneInput(phoneText, options) ||
-    PhonePatternSettings.normalizePhoneForTel(phoneText, settings, options);
+function normalizeSelectedPhoneText(phoneText) {
+  if (typeof phoneText !== 'string') return null;
+
+  const trimmed = phoneText
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2212]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!trimmed || trimmed.length > MAX_SELECTED_GOOGLE_VOICE_INPUT_LENGTH) return null;
+  if (!/\d/.test(trimmed)) return null;
+  if (/[^0-9A-Za-z+*#().,:\-\s]/.test(trimmed)) return null;
+  if ((trimmed.match(/\+/g) || []).length > 1) return null;
+
+  return trimmed;
 }
 
 function normalizeTelLinkPhoneText(phoneText) {
@@ -147,13 +157,7 @@ function registerContextMenus() {
     chrome.contextMenus.create({
       id: MENU_CALL_SELECTION,
       title: "Call '%s'",
-      contexts: ["selection"]
-    });
-
-    chrome.contextMenus.create({
-      id: MENU_CALL_TEL_LINK,
-      title: 'Call link phone number',
-      contexts: ["link"],
+      contexts: ["selection", "link"],
       visible: false
     });
   });
@@ -161,37 +165,54 @@ function registerContextMenus() {
 
 registerContextMenus();
 
+function updateContextMenuVisibility(context, shouldRefresh) {
+  const hasSelection = Boolean(context.selectionText && context.selectionText.trim());
+  const hasTelLink = Boolean(context.linkUrl && context.linkUrl.toLowerCase().startsWith('tel:'));
+
+  chrome.contextMenus.update(MENU_CALL_SELECTION, {
+    title: hasSelection ? "Call '%s'" : 'Call link phone number',
+    visible: hasSelection || hasTelLink
+  }, () => {
+    void chrome.runtime.lastError;
+    if (shouldRefresh && chrome.contextMenus.refresh) {
+      chrome.contextMenus.refresh();
+    }
+  });
+}
+
+if (chrome.contextMenus.onShown) {
+  chrome.contextMenus.onShown.addListener((info) => {
+    updateContextMenuVisibility(info, true);
+  });
+}
+
 chrome.runtime.onMessage.addListener((message) => {
   if (!message || message.type !== 'phoneLinkifierContextMenu') return;
 
-  const hasSelection = Boolean(message.selectionText && message.selectionText.trim());
-  const hasTelLink = Boolean(message.linkUrl && message.linkUrl.toLowerCase().startsWith('tel:'));
-
-  chrome.contextMenus.update(MENU_CALL_TEL_LINK, {
-    visible: hasTelLink && !hasSelection
-  }, () => {
-    if (chrome.runtime.lastError) return;
-  });
+  updateContextMenuVisibility(message, false);
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === MENU_CALL_SELECTION && info.selectionText) {
-    const selected = info.selectionText;
-    const tel = await normalizePhoneText(selected);
+  if (info.menuItemId !== MENU_CALL_SELECTION) return;
 
-    if (tel) {
-      try {
-        await openGoogleVoicePopup(tel, tab);
-      } catch (err) {
-        console.error('Error opening Google Voice call popup:', err);
-      }
-    } else {
-      await showInvalidPhoneToast(tab, 'Selected text is not a valid phone number');
+  if (info.selectionText) {
+    const selected = info.selectionText;
+    const tel = normalizeSelectedPhoneText(selected);
+
+    if (!tel) {
+      await showInvalidPhoneToast(tab, 'Selected text cannot be sent to Google Voice');
+      return;
+    }
+
+    try {
+      await openGoogleVoicePopup(tel, tab);
+    } catch (err) {
+      console.error('Error opening Google Voice call popup:', err);
     }
     return;
   }
 
-  if (info.menuItemId === MENU_CALL_TEL_LINK && info.linkUrl) {
+  if (info.linkUrl) {
     const phoneText = extractTelLinkText(info.linkUrl);
     const tel = phoneText ? normalizeTelLinkPhoneText(phoneText) : null;
 
